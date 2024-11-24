@@ -642,6 +642,24 @@ _Py_TryXGetRef(PyObject **ptr)
     return NULL;
 }
 
+// This belongs here rather than pycore_stackref.h because including pycore_object.h
+// there causes a circular include.
+static inline _PyStackRef
+_Py_TryXGetStackRef(PyObject **ptr)
+{
+    PyObject *value = _Py_atomic_load_ptr(ptr);
+    if (value == NULL) {
+        return PyStackRef_NULL;
+    }
+    if (_Py_IsImmortal(value) || _PyObject_HasDeferredRefcount(value)) {
+        return (_PyStackRef){ .bits = (uintptr_t)value | Py_TAG_DEFERRED };
+    }
+    if (_Py_TryIncrefCompare(ptr, value)) {
+        return PyStackRef_FromPyObjectSteal(value);
+    }
+    return PyStackRef_NULL;
+}
+
 /* Like Py_NewRef but also optimistically sets _Py_REF_MAYBE_WEAKREF
    on objects owned by a different thread. */
 static inline PyObject *
@@ -835,7 +853,8 @@ extern int _PyObject_StoreInstanceAttribute(PyObject *obj,
                                             PyObject *name, PyObject *value);
 extern bool _PyObject_TryGetInstanceAttribute(PyObject *obj, PyObject *name,
                                               PyObject **attr);
-
+extern bool _PyObject_TryGetInstanceAttributeStackRef(PyObject *obj, PyObject *name,
+                                              _PyStackRef *attr);
 #ifdef Py_GIL_DISABLED
 #  define MANAGED_DICT_OFFSET    (((Py_ssize_t)sizeof(PyObject *))*-1)
 #  define MANAGED_WEAKREF_OFFSET (((Py_ssize_t)sizeof(PyObject *))*-2)
@@ -882,6 +901,7 @@ PyAPI_FUNC(PyObject*) _PyObject_LookupSpecialMethod(PyObject *self, PyObject *at
 extern int _PyObject_IsAbstract(PyObject *);
 
 PyAPI_FUNC(int) _PyObject_GetMethod(PyObject *obj, PyObject *name, PyObject **method);
+PyAPI_FUNC(int) _PyObject_GetMethodStackRef(PyObject *obj, PyObject *name, _PyStackRef *method, _PyStackRef *spare);
 extern PyObject* _PyObject_NextNotImplemented(PyObject *);
 
 // Pickle support.
@@ -918,6 +938,8 @@ PyAPI_DATA(PyTypeObject) _PyNotImplemented_Type;
 PyAPI_DATA(int) _Py_SwappedOp[];
 
 extern void _Py_GetConstant_Init(void);
+
+extern void _PyType_LookupStackRef(PyTypeObject *type, PyObject *name, _PyStackRef *result);
 
 #ifdef __cplusplus
 }

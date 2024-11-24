@@ -5188,8 +5188,8 @@
             _Py_CODEUNIT* const this_instr = next_instr - 10;
             (void)this_instr;
             _PyStackRef owner;
-            _PyStackRef attr;
-            _PyStackRef self_or_null = PyStackRef_NULL;
+            _PyStackRef *attr;
+            _PyStackRef *self_or_null = NULL;
             // _SPECIALIZE_LOAD_ATTR
             {
                 owner = stack_pointer[-1];
@@ -5211,21 +5211,22 @@
             /* Skip 8 cache entries */
             // _LOAD_ATTR
             {
+                attr = &stack_pointer[-1];
+                self_or_null = &stack_pointer[0];
                 PyObject *name = GETITEM(FRAME_CO_NAMES, oparg >> 1);
-                PyObject *attr_o;
                 if (oparg & 1) {
                     /* Designed to work in tandem with CALL, pushes two values. */
-                    attr_o = NULL;
+                    *attr = PyStackRef_NULL;
                     _PyFrame_SetStackPointer(frame, stack_pointer);
-                    int is_meth = _PyObject_GetMethod(PyStackRef_AsPyObjectBorrow(owner), name, &attr_o);
+                    int is_meth = _PyObject_GetMethodStackRef(PyStackRef_AsPyObjectBorrow(owner), name, attr, self_or_null);
                     stack_pointer = _PyFrame_GetStackPointer(frame);
                     if (is_meth) {
                         /* We can bypass temporary bound method object.
                            meth is unbound method and obj is self.
                            meth | self | arg1 | ... | argN
                          */
-                        assert(attr_o != NULL);  // No errors on this branch
-                        self_or_null = owner;  // Transfer ownership
+                        assert(!PyStackRef_IsNull(*attr));  // No errors on this branch
+                        *self_or_null = owner;  // Transfer ownership
                     }
                     else {
                         /* meth is not an unbound method (but a regular attr, or
@@ -5235,25 +5236,28 @@
                            meth | NULL | arg1 | ... | argN
                          */
                         PyStackRef_CLOSE(owner);
-                        if (attr_o == NULL) goto pop_1_error;
-                        self_or_null = PyStackRef_NULL;
+                        if (PyStackRef_IsNull(*attr)) goto pop_1_error;
+                        *self_or_null = PyStackRef_NULL;
                     }
                 }
                 else {
                     /* Classic, pushes one value. */
                     _PyFrame_SetStackPointer(frame, stack_pointer);
-                    attr_o = PyObject_GetAttr(PyStackRef_AsPyObjectBorrow(owner), name);
+                    PyObject *attr_o = PyObject_GetAttr(PyStackRef_AsPyObjectBorrow(owner), name);
                     stack_pointer = _PyFrame_GetStackPointer(frame);
-                    PyStackRef_CLOSE(owner);
-                    if (attr_o == NULL) goto pop_1_error;
+                    if (attr_o == NULL) {
+                        *attr = PyStackRef_NULL;
+                    }
+                    else {
+                        *attr = PyStackRef_FromPyObjectSteal(attr_o);
+                    }
                     /* We need to define self_or_null on all paths */
-                    self_or_null = PyStackRef_NULL;
+                    *self_or_null = PyStackRef_NULL;
+                    PyStackRef_CLOSE(owner);
+                    if (PyStackRef_IsNull(*attr)) goto pop_1_error;
                 }
-                attr = PyStackRef_FromPyObjectSteal(attr_o);
             }
-            stack_pointer[-1] = attr;
-            if (oparg & 1) stack_pointer[0] = self_or_null;
-            stack_pointer += (oparg & 1);
+            stack_pointer += ((oparg & 1) ? 1 : 0);
             assert(WITHIN_STACK_BOUNDS());
             DISPATCH();
         }
